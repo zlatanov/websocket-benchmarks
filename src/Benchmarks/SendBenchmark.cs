@@ -13,7 +13,7 @@ namespace WebSocketBenchmarks
         [Params(true, false)]
         public bool IsServer { get; set; }
 
-        [Params(0, 64, 128, 5012, 1_048_576)]
+        [Params(0, 64, 128, 4 * 1024, 16 * 1024, 1_048_576)]
         public int MessageSize { get; set; }
 
         public WebSocket WebSocket { get; set; }
