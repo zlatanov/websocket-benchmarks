@@ -18,7 +18,7 @@ namespace WebSocketBenchmarks
         private Memory<byte> _clientInput;
         private Memory<byte> _clientOutput;
 
-        [Params(0, 100, 10_000)]
+        [Params(50, 100, 1000)]
         public int MessageSize { get; set; }
 
         [Params(10_000)]
@@ -30,6 +30,7 @@ namespace WebSocketBenchmarks
             _host = Host.CreateDefaultBuilder()
                  .ConfigureWebHostDefaults(x =>
                  {
+                     x.UseKestrel();
                      x.UseUrls("http://localhost:5555");
                      x.Configure(app =>
                      {
@@ -39,23 +40,32 @@ namespace WebSocketBenchmarks
                          });
                          app.Use(async (context, next) =>
                          {
-                             using var websocket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-
-                             Memory<byte> buffer = new byte[MessageSize];
-                             var result = await websocket.ReceiveAsync(buffer, context.RequestAborted).ConfigureAwait(false);
-
-                             while (result.MessageType != WebSocketMessageType.Close)
+                             try
                              {
-                                 if (!result.EndOfMessage || result.Count != buffer.Length)
+                                 using var websocket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
+
+                                 Memory<byte> buffer = new byte[MessageSize];
+                                 var result = await websocket.ReceiveAsync(buffer, default).ConfigureAwait(false);
+
+                                 while (result.MessageType != WebSocketMessageType.Close)
                                  {
-                                     Environment.FailFast("Unexpected end of message or different message size.");
+                                     var receivedByteCount = result.Count;
+                                     while (!result.EndOfMessage)
+                                     {
+                                         result = await websocket.ReceiveAsync(buffer.Slice(receivedByteCount), default).ConfigureAwait(false);
+                                         receivedByteCount += result.Count;
+                                     }
+
+                                     await websocket.SendAsync(buffer, WebSocketMessageType.Binary, true, default).ConfigureAwait(false);
+                                     result = await websocket.ReceiveAsync(buffer, default).ConfigureAwait(false);
                                  }
 
-                                 await websocket.SendAsync(buffer, WebSocketMessageType.Binary, true, context.RequestAborted).ConfigureAwait(false);
-                                 result = await websocket.ReceiveAsync(buffer, context.RequestAborted).ConfigureAwait(false);
+                                 await websocket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None);
                              }
-
-                             await websocket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None);
+                             catch ( Exception ex)
+                             {
+                                 Environment.FailFast(ex.Message, ex);
+                             }
                          });
                      });
                  })
@@ -76,7 +86,7 @@ namespace WebSocketBenchmarks
         [GlobalCleanup]
         public async Task Cleanup()
         {
-            await _client.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None);
+            await _client.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None).ConfigureAwait(false);
             await _host.StopAsync().ConfigureAwait(false);
             _host.Dispose();
             _client.Dispose();
@@ -85,14 +95,16 @@ namespace WebSocketBenchmarks
         [Benchmark]
         public async Task Echo()
         {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+
             for (var i = 0; i < MessageCount; ++i)
             {
-                await _client.SendAsync(_clientOutput, WebSocketMessageType.Binary, true, CancellationToken.None).ConfigureAwait(false);
-                var response = await _client.ReceiveAsync(_clientInput, CancellationToken.None).ConfigureAwait(false);
+                await _client.SendAsync(_clientOutput, WebSocketMessageType.Binary, true, cancellation.Token).ConfigureAwait(false);
+                var response = await _client.ReceiveAsync(_clientInput, cancellation.Token).ConfigureAwait(false);
 
                 if (!response.EndOfMessage || response.Count != _clientOutput.Length)
                 {
-                    Environment.FailFast("Unexpected end of message or different response message size.");
+                    Environment.FailFast($"Unexpected end of message or different response message size: {response.Count}, eof: {response.EndOfMessage}.");
                 }
             }
         }
