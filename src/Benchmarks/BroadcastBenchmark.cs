@@ -2,6 +2,8 @@
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System;
@@ -28,6 +30,13 @@ namespace WebSocketBenchmarks
         {
             _host = WebHost.CreateDefaultBuilder()
                  .ConfigureLogging(builder => builder.ClearProviders())
+                 .ConfigureServices(services =>
+                 {
+                     services.Configure<SocketTransportOptions>(options =>
+                     {
+                         options.UnsafePreferInlineScheduling = true;
+                     });
+                 })
                  .Configure(app =>
                  {
                      app.UseWebSockets(new WebSocketOptions

@@ -2,6 +2,8 @@
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
+using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Net.WebSockets;
 using System.Threading;
@@ -27,42 +29,49 @@ namespace WebSocketBenchmarks
         public async Task Setup()
         {
             _host = WebHost.CreateDefaultBuilder()
-                 .Configure(app =>
-                 {
-                     app.UseWebSockets(new WebSocketOptions
-                     {
-                         KeepAliveInterval = Timeout.InfiniteTimeSpan
-                     });
-                     app.Use(async (context, next) =>
-                     {
-                         try
-                         {
-                             using var websocket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
+                .ConfigureServices(services =>
+                {
+                    services.Configure<SocketTransportOptions>(options =>
+                    {
+                        options.UnsafePreferInlineScheduling = true;
+                    });
+                })
+                .Configure(app =>
+                {
+                    app.UseWebSockets(new WebSocketOptions
+                    {
+                        KeepAliveInterval = Timeout.InfiniteTimeSpan
+                    });
+                    app.Use(async (context, next) =>
+                    {
+                        try
+                        {
+                            using var websocket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
 
-                             Memory<byte> buffer = new byte[MessageSize];
-                             var result = await websocket.ReceiveAsync(buffer, default).ConfigureAwait(false);
+                            Memory<byte> buffer = new byte[MessageSize];
+                            var result = await websocket.ReceiveAsync(buffer, default).ConfigureAwait(false);
 
-                             while (result.MessageType != WebSocketMessageType.Close)
-                             {
-                                 var receivedByteCount = result.Count;
-                                 while (!result.EndOfMessage)
-                                 {
-                                     result = await websocket.ReceiveAsync(buffer.Slice(receivedByteCount), default).ConfigureAwait(false);
-                                     receivedByteCount += result.Count;
-                                 }
+                            while (result.MessageType != WebSocketMessageType.Close)
+                            {
+                                var receivedByteCount = result.Count;
+                                while (!result.EndOfMessage)
+                                {
+                                    result = await websocket.ReceiveAsync(buffer.Slice(receivedByteCount), default).ConfigureAwait(false);
+                                    receivedByteCount += result.Count;
+                                }
 
-                                 await websocket.SendAsync(buffer, WebSocketMessageType.Binary, true, default).ConfigureAwait(false);
-                                 result = await websocket.ReceiveAsync(buffer, default).ConfigureAwait(false);
-                             }
+                                await websocket.SendAsync(buffer, WebSocketMessageType.Binary, true, default).ConfigureAwait(false);
+                                result = await websocket.ReceiveAsync(buffer, default).ConfigureAwait(false);
+                            }
 
-                             await websocket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None).ConfigureAwait(false);
-                         }
-                         catch (Exception ex)
-                         {
-                             Environment.FailFast(ex.Message, ex);
-                         }
-                     });
-                 }).Build();
+                            await websocket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            Environment.FailFast(ex.Message, ex);
+                        }
+                    });
+                }).Build();
 
             _host.Start();
 
@@ -88,12 +97,10 @@ namespace WebSocketBenchmarks
         [Benchmark]
         public async Task Echo()
         {
-            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(1));
-
             for (var i = 0; i < MessageCount; ++i)
             {
-                await _client.SendAsync(_clientOutput, WebSocketMessageType.Binary, true, cancellation.Token).ConfigureAwait(false);
-                var response = await _client.ReceiveAsync(_clientInput, cancellation.Token).ConfigureAwait(false);
+                await _client.SendAsync(_clientOutput, WebSocketMessageType.Binary, true, CancellationToken.None).ConfigureAwait(false);
+                var response = await _client.ReceiveAsync(_clientInput, CancellationToken.None).ConfigureAwait(false);
 
                 if (!response.EndOfMessage || response.Count != _clientOutput.Length)
                 {
